@@ -1,0 +1,33 @@
+# --- Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+.env
+.env.*.local
+
+# DB & local data
+data/**
+!data/.gitkeep         # keep the folder in Git
+!data/fixtures/**       # allow sample fixtures if you want
+
+*.db
+*.sqlite
+
+# Node (if/when you add web/)
+web/node_modules/
+web/.next/
+web/out/
+web/dist/
+web/build/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.code-workspace
+
+# Logs & misc
+*.log
+.ipynb_checkpoints/

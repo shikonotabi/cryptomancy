@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+requests
+web3
+pydantic==2.*
+python-dotenv
+pydantic-settings
+sqlalchemy>=2.0
+aiosqlite
+pydantic-settings>=2.3,<3
