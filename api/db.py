@@ -13,12 +13,13 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
-    Numeric,
+    JSON,
     String,
     UniqueConstraint,
-    Index,
-    JSON,
+    inspect,
+    text,
 )
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
@@ -82,33 +83,52 @@ class Pool(Base):
 
 class Swap(Base):
     __tablename__ = "swaps"
+    __table_args__ = (
+        UniqueConstraint("tx_hash", "log_index", name="uq_swaps_tx_log"),
+        Index("ix_swaps_pool_block", "pool_id", "block_number"),
+        Index("ix_swaps_pool_time", "pool_id", "block_time"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    time: Mapped[DateTime] = mapped_column(DateTime, nullable=False, index=True)
-    block: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    tx_hash: Mapped[str] = mapped_column(String(86), nullable=False, index=True)
+    chain_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     pool_id: Mapped[int] = mapped_column(ForeignKey("pools.id"), nullable=False)
-    amount0: Mapped[Numeric] = mapped_column(Numeric(78, 0), nullable=False)
-    amount1: Mapped[Numeric] = mapped_column(Numeric(78, 0), nullable=False)
-    sqrt_price_x96: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    tx_hash: Mapped[str] = mapped_column(String(66), nullable=False)
+    log_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    block_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    block_time: Mapped[int] = mapped_column(Integer, nullable=False)
+    sender: Mapped[str | None] = mapped_column(String(42))
+    recipient: Mapped[str | None] = mapped_column(String(42))
+    amount0: Mapped[str] = mapped_column(String, nullable=False)
+    amount1: Mapped[str] = mapped_column(String, nullable=False)
+    sqrt_price_x96: Mapped[str] = mapped_column(String, nullable=False)
+    liquidity_after: Mapped[str] = mapped_column(String, nullable=False)
     tick: Mapped[int] = mapped_column(Integer, nullable=False)
-    fee_paid: Mapped[Numeric] = mapped_column(Numeric(78, 0), nullable=False)
 
     pool: Mapped[Pool] = relationship("Pool", back_populates="swaps")
 
 
 class LiquidityEvent(Base):
     __tablename__ = "liquidity_events"
+    __table_args__ = (
+        UniqueConstraint("tx_hash", "log_index", name="uq_liquidity_tx_log"),
+        Index("ix_liquidity_pool_block", "pool_id", "block_number"),
+        Index("ix_liquidity_pool_time", "pool_id", "block_time"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    time: Mapped[DateTime] = mapped_column(DateTime, nullable=False, index=True)
-    block: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    tx_hash: Mapped[str] = mapped_column(String(86), nullable=False, index=True)
+    chain_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     pool_id: Mapped[int] = mapped_column(ForeignKey("pools.id"), nullable=False)
-    owner: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    lower_tick: Mapped[int] = mapped_column(Integer, nullable=False)
-    upper_tick: Mapped[int] = mapped_column(Integer, nullable=False)
-    liquidity_delta: Mapped[Numeric] = mapped_column(Numeric(78, 0), nullable=False)
+    tx_hash: Mapped[str] = mapped_column(String(66), nullable=False)
+    log_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    block_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    block_time: Mapped[int] = mapped_column(Integer, nullable=False)
+    etype: Mapped[str] = mapped_column(String(8), nullable=False)
+    owner: Mapped[str] = mapped_column(String(42), nullable=False)
+    tick_lower: Mapped[int] = mapped_column(Integer, nullable=False)
+    tick_upper: Mapped[int] = mapped_column(Integer, nullable=False)
+    amount_liquidity: Mapped[str] = mapped_column(String, nullable=False)
+    amount0: Mapped[str] = mapped_column(String, nullable=False)
+    amount1: Mapped[str] = mapped_column(String, nullable=False)
 
     pool: Mapped[Pool] = relationship("Pool", back_populates="liquidity_events")
 
@@ -202,6 +222,57 @@ def _ensure_data_dir(database_url: str) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
 
+def _prepare_schema(sync_conn) -> None:
+    inspector = inspect(sync_conn)
+
+    expected_swaps = {
+        "id",
+        "chain_id",
+        "pool_id",
+        "tx_hash",
+        "log_index",
+        "block_number",
+        "block_time",
+        "sender",
+        "recipient",
+        "amount0",
+        "amount1",
+        "sqrt_price_x96",
+        "liquidity_after",
+        "tick",
+    }
+    expected_liquidity = {
+        "id",
+        "chain_id",
+        "pool_id",
+        "tx_hash",
+        "log_index",
+        "block_number",
+        "block_time",
+        "etype",
+        "owner",
+        "tick_lower",
+        "tick_upper",
+        "amount_liquidity",
+        "amount0",
+        "amount1",
+    }
+
+    existing_tables = set(inspector.get_table_names())
+
+    if "swaps" in existing_tables:
+        swap_cols = {col["name"] for col in inspector.get_columns("swaps")}
+        if swap_cols != expected_swaps:
+            sync_conn.execute(text("DROP TABLE swaps"))
+
+    if "liquidity_events" in existing_tables:
+        liq_cols = {col["name"] for col in inspector.get_columns("liquidity_events")}
+        if liq_cols != expected_liquidity:
+            sync_conn.execute(text("DROP TABLE liquidity_events"))
+
+    Base.metadata.create_all(sync_conn)
+
+
 async def init_db(database_url: str | None = None) -> AsyncEngine:
     """Initialize the async engine, create tables, and return the engine."""
 
@@ -217,7 +288,7 @@ async def init_db(database_url: str | None = None) -> AsyncEngine:
     _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
 
     async with _engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_prepare_schema)
 
     return _engine
 
